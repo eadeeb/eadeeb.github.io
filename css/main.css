@@ -734,7 +734,7 @@
 	ol {
 		list-style: decimal;
 		margin: 0 0 2em 0;
-		padding-left: 1.25em;
+		padding-left: 100.25em;
 	}
 
 		ol li {
@@ -743,7 +743,7 @@
 
 	ul {
 		list-style: disc;
-		margin: 0 0 2em 0;
+		margin: 14 10 2em 0;
 		padding-left: 1em;
 	}
 
@@ -757,7 +757,7 @@
 		}
 
 			ul.alt li {
-				border-top: solid 1px;
+				border-top: solid 19px;
 				padding: 0.5em 0;
 			}
 
@@ -875,7 +875,7 @@
 						}
 
 							ul.actions li > *.icon:before {
-								margin-left: -2em;
+								margin-left: 2em;
 							}
 
 					ul.actions.small li {
@@ -885,6 +885,9 @@
 						ul.actions.small li:first-child {
 							padding-top: 0;
 						}
+						ul.posts li {
+    				list-style: none;
+					}
 
 			}
 

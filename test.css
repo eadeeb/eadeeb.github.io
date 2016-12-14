@@ -1,0 +1,66 @@
+@import url(font-awesome.min.css);
+@import url(https://fonts.googleapis.com/css?family=Pattaya|Work+Sans:400,200,300);
+
+/* This is my css test*/
+
+body {
+    font-family: 'Work Sans', sans-serif;
+    font-size: 13pt;
+    font-weight: 300;
+    line-height: 1.65;
+
+    width: 70%;
+    padding: 0px;
+    list-style: none;
+    font-weight: bold;
+    margin-right: 20px;
+    }
+    nav ul, footer ul {
+        font-family: 'Work Sans', sans-serif;
+        padding: 0px;
+        list-style: none;
+        font-weight: bold;
+    }
+    nav ul li, footer ul li {
+        font-family: 'Work Sans', sans-serif;
+        font-size: 1.7em;
+        font-weight: 300;
+        display: inline;
+        margin-right: 20px;
+    }
+    /*this is for the text in my header options*/
+    a {
+        text-decoration: none;
+        color: #A80717;
+    }
+    a:hover {
+
+    }
+    p {
+        font-family: 'Work Sans', sans-serif;
+        font-weight: 300;
+        font-size: 1.5em;
+        line-height: 1.4em;
+        color: #333;
+    }
+    footer {
+        border-top: 1px solid #d5d5d5;
+        font-size: .8em;
+    }
+
+    ul.posts {
+        margin: 20px auto 40px;
+        font-size: 1.5em;
+    }
+
+    ul.posts li {
+        list-style: none;
+    }
+
+    li{
+        font-family: 'Work Sans', sans-serif;
+    }
+
+    ul{
+        font-family: 'Work Sans', sans-serif;
+    }
