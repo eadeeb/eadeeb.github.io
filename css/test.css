@@ -8,12 +8,14 @@ body {
     font-size: 14pt;
     font-weight: 300;
     line-height: 1.65;
-
     width: 70%;
     padding: 0px;
     list-style: none;
     font-weight: bold;
     margin-right: 20px;
+    }
+    table, th, td {
+    border: 1px solid black;
     }
     nav ul, footer ul {
         font-family: 'Work Sans', sans-serif;
@@ -39,9 +41,10 @@ body {
     p {
         font-family: 'Work Sans', sans-serif;
         font-weight: 300;
-        font-size: 1.5em;
+        font-size: 1em;
         line-height: 1.4em;
         color: #333;
+
     }
     footer {
         border-top: 1px solid #d5d5d5;
