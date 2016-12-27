@@ -1,0 +1,807 @@
+---
+title: "NBA Submission"
+author: "Dani Chu (301238635) and Ebrahim (Abe) Adeeb (301056620)"
+date: "2016/11/08"
+output: 
+  html_document:
+      toc: yes
+      toc_float: yes
+      toc_depth: 4
+      collapsed: FALSE
+    
+---
+
+```{r setup, include=FALSE}
+pacman::p_load(fields, plotrix, dplyr,plyr, glmnet,caret)
+```
+
+
+\n
+\n
+
+
+---------------------------------------------------------------------------------------
+
+# Introduction
+
+In this module, our goal is to predict whether or not a particular shot is made in a basketball game given information about the conditions under which the shot was made. We have a variety of information we can use to make these predictions, including data on the shooter, shot location, and defender etc. 
+
+Our evaluation metric is the logarithm of the likelihood function for a Bernouli random distribution. This error metric is used where contestants have to predict that something is true or false with a probability (likelihood) ranging from definitely true (1) to equally true (0.5) to definitely false(0).
+
+The use of log on the error provides extreme punishments for being both confident and wrong. In the worst possible case, a single prediction that something is definitely true (1) when it is actually false will add infinite to your error score and make every other entry pointless.
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+
+```{r eval_metric}
+eval_metric <- function(response, predicted_probs) {
+  N <- length(response)
+  logloss <- -(1/N) * sum(response * log(predicted_probs) + (1-response) * log(1 - predicted_probs))
+  logloss
+}
+
+# Function that converts factor to numeric variable
+fac_to_num <- function(fac) {
+  as.numeric(as.character(fac))
+}
+```
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+* Training data contains 444109 rows/observations with 29 variables
+
+* Testing data contains 165587 rows/observations with 29 variables
+
+
+###Data fields
+
+The variables included in train.csv and test.csv are:
+
+**Variable -	Description**
+
+* id	- shot ID
+
+* season	- year in which the regular season ends (i.e., 2014 for the 2013-14 season)
+
+* game	- game ID of the form (year month day home_team_id)
+
+* quarter	- quarter of the game
+
+* team	- shooter's team
+
+* opponent	- shooter's opponent's team
+
+* home	- indicator with a 1 if the shooter is playing at home
+
+* offense_basket	- indicates whether the shooter is shooting at the basket on the left or right side of the court
+
+* passer	- player_id of the player who passed the ball to the shooter
+
+* pass_x	- x coordinate of the passer location
+
+* pass_y	- y coordinate of the passer location
+
+* pass_distance	- length of the pass to the shooter
+
+* pass_shot_clock	- value of the shot clock when the ball was passed, counting backwards in seconds from 24
+
+* pass_game_clock	- value of the game clock when the ball was passed, counting backwards in minutes from 720 at the top of the quarter to 0 at the bottom
+* shooter	- player_id of the player who shot the ball
+
+* poss_x	- x coordinate of the location where the shooter gained possession of the ball
+
+* poss_y	- y coordinate of the location where the shooter gained possession of the ball
+
+* poss_shot_clock	- value of the shot clock when the shooter gained possession of the ball, counting backwards in seconds from 24
+
+* poss_game_clock	- value of the game clock when the shooter gained possession of the ball, counting backwards in minutes from 720 at the top of the quarter to 0 at the bottom
+
+* shot_x	- x coordinate of the location where the shot was taken
+
+* shot_y	- y coordinate of the location where the shot was taken
+
+* shot_shot_clock	- value of the shot clock when the shot was taken, counting backwards in seconds from 24
+
+* shot_game_clock	- value of the game clock when the shot was taken, counting backwards in minutes from 720 at the top of the quarter to 0 at the bottom
+
+* dribbles	- number of dribbles between the shooter gaining possession of the ball and taking the shot
+
+* distance_travelled	- distance in feet travelled by the shooter after gaining possession of the ball
+
+* defender	- player_id for the nearest defender when the shot was taken
+
+* ndd	- nearest defender distance in feet
+
+* made	- indicator with a 1 representing a made shot and 0 a missed shot
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+```{r load_data, include = FALSE}
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+players <- read.csv("players.csv")
+teams <- read.csv("teams.csv")
+```
+
+### Initialize constants and Functions
+
+
+* I labeled the coordinates of the left and right hoop.
+
+* Created the calculate shot distance function and both the draw and plot court functions.
+
+```{r shot_dist}
+
+# X,Y coordinates for the basketball hoops
+left_hoop_xy <- cbind(5.25, 25)
+right_hoop_xy <- cbind(88.75, 25)
+
+calc_shot_dist <- function(shot_data) {
+  n <- nrow(shot_data)
+  left_shot_ind <- shot_data$offense_basket == "L"
+  right_shot_ind <- shot_data$offense_basket == "R"
+  shot_dist <- numeric(n)
+  shot_dist[left_shot_ind] <- 
+    rdist(shot_data[left_shot_ind, c("shot_x", "shot_y")], left_hoop_xy)
+  
+  shot_dist[right_shot_ind] <- 
+    rdist(shot_data[right_shot_ind, c("shot_x", "shot_y")], right_hoop_xy)
+  shot_dist
+}
+```
+
+```{r plot_court_function, include = F}
+## draw the basketball court 
+draw.court = function() {
+  rect(0, 0, 94, 50)
+  circle = function(x, y, r, from = 0, to = 2 * pi, lines = FALSE, ...) {
+    theta = seq(from, to, length = 100)
+    if (lines)
+      lines(x + r * cos(theta), y + r * sin(theta), ...)
+    else polygon(x + r * cos(theta), y + r * sin(theta), ...)
+  }
+  points(c(5.25, 94 - 5.25), c(25, 25), cex = 2)
+  segments(47, 0, 47, 50)
+  circle(47, 25, 8)
+           circle(47, 25, 2, col = "lightgray")
+         theta1 = acos((25 - 35/12)/23.75)
+         circle(5.25, 25, 23.75, -pi/2 + theta1, pi/2 - theta1, TRUE)
+         circle(94 - 5.25, 25, 23.75, pi/2 + theta1, 3 * pi/2 - theta1, TRUE)
+         segments(0, 35/12, 5.25 + 23.75 * sin(theta1), 35/12)
+         segments(0, 50 - 35/12, 5.25 + 23.75 * sin(theta1), 50 - 35/12)
+         segments(94, 35/12, 94 - 5.25 - 23.75 * sin(theta1), 35/12)
+         segments(94, 50 - 35/12, 94 - 5.25 - 23.75 * sin(theta1), 50 - 35/12)
+         circle(19, 25, 6, -pi/2, pi/2, TRUE)
+         circle(19, 25, 6, pi/2, 3 * pi/2, TRUE, lty = 2)
+         circle(94 - 19, 25, 6, pi/2, 3 * pi/2, TRUE)
+         circle(94 - 19, 25, 6, -pi/2, pi/2, TRUE, lty = 2)
+         circle(5.25, 25, 4, -pi/2, pi/2, TRUE)
+         circle(94 - 5.25, 25, 4, pi/2, 3 * pi/2, TRUE)
+         rect(0, 17, 19, 33, border = "gray")
+         rect(94, 17, 94 - 19, 33, border = "gray")
+}
+
+# Function that plots the court
+plot_court <- function(main) {
+  plot(0,0,pch=46,xlim=c(0,94), ylim=c(0,50), main=main, xlab = '', ylab = '')
+  draw.court()
+}
+```
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+###Categorize Data
+
+
+I added the shot distance column to each shot. As well as other categorical variables such to determine whether a shot was Contested, Rushed, Catch and Shoot, and off a Pass.
+
+* Contested: 4 level Factor, with (ndd)nearest defender, 1 if <4, 2 if >7, 3 if >30, 0 otherwise
+
+* Rushed: 3 level Factor, with shot_shot_clock, 1 if <7, 2 if >17, 0 otherwise
+
+* Catch and Shoot: 2 level Factor, with dribbles, 1 if ==0, 0 otherwise
+
+* Off a Pass: 2 level Factor, with passer, 0 if NA, 1 otherwise
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+```{r categorize, echo=FALSE}
+
+#Shot Distance
+train$shot_dist <- calc_shot_dist(train)
+test$shot_dist <- calc_shot_dist(test)
+
+#Contested Shot, 0 for not contested, 1 for contested, 2 for Wide Open
+train$contested=0
+test$contested=0
+
+train[which(train$ndd<4),]$contested=1
+test[which(test$ndd<4),]$contested=1
+
+train[which(train$ndd>7),]$contested=2
+test[which(test$ndd>7),]$contested=2
+
+
+train[which(train$ndd>30),]$contested=3
+test[which(test$ndd>30),]$contested=3
+
+
+train$contested=as.factor(train$contested)
+test$contested=as.factor(test$contested)
+
+#Summarize the shot clock, missing data is becuase shot clock was turned off due to game clock having less than 24 seconds on it
+train[which(is.na(train$shot_shot_clock)&(train$shot_game_clock<24)),]$shot_shot_clock=train[which(is.na(train$shot_shot_clock)&(train$shot_game_clock<24)),]$shot_game_clock
+test[which(is.na(test$shot_shot_clock)&(test$shot_game_clock<24)),]$shot_shot_clock=test[which(is.na(test$shot_shot_clock)&(test$shot_game_clock<24)),]$shot_game_clock
+
+#if shot was taken in regular flow of offense rushed =0
+train$rushed=0
+test$rushed=0
+
+#if shot clock was under 7 seconds set to 1
+train[which(train$shot_shot_clock<7),]$rushed=1
+test[which(test$shot_shot_clock<7),]$rushed=1
+
+#if shot clock was over 19, it was probably a fast break, and a good shot
+train[which(train$shot_shot_clock>17),]$rushed=2
+test[which(test$shot_shot_clock>17),]$rushed=2
+
+
+train$rushed=as.factor(train$rushed)
+test$rushed=as.factor(test$rushed)
+
+#was the shot a catch and shoot (can improve still)
+#if the shooter didnt dribble then set to 1
+train$catchnshoot=0
+test$catchnshoot=0
+
+train[which(train$dribbles==0),]$catchnshoot=1
+test[which(test$dribbles==0),]$catchnshoot=1
+
+train$catchnshoot=as.factor(train$catchnshoot)
+test$catchnshoot=as.factor(test$catchnshoot)
+
+#can combine with catch and shoot later, but if there was a pass that led to the shot, the shot is more likely to be a good one
+train$ispasser=1
+test$ispasser=1
+
+train[is.na(train$passer),]$ispasser=0
+test[is.na(test$passer),]$ispasser=0
+
+train$ispasser=as.factor(train$ispasser)
+test$ispasser=as.factor(test$ispasser)
+
+```
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+*We can see that that shots are logged on both hoops,*
+
+
+```{r plots, echo=FALSE}
+plot_court("First 500 Shots in Training")
+points(train[c(1:500),]$shot_x, train[c(1:500),]$shot_y, pch = 1, col="black")
+points(train[train$game==2013102911,]$shot_x, train[train$game==2013102911,]$shot_y, pch = 1, col="black")
+points(test[test$game==2013102911,]$shot_x, test[test$game==2013102911,]$shot_y, pch = 1, col="red")
+```
+
+
+We investigated the distribution of the data based on their season and notice that most of the testing data is from the most recent season. Therefore, we should account for the increase in skill of players in the most recent season.
+```{r samplingDist, echo=FALSE}
+hist(train$game, breaks=1000, main="Training Data Sampling Distribution", xlab="Season")
+hist(test$game, breaks=1000, main="Testing Data Sampling Distribution", xlab="Season")
+```
+
+*I then used symmetry to look at all the shots as if they were taken on only one hoop*
+
+
+```{r Halfcourtify, echo=FALSE}
+##Create Left Shot x and y variables for test and train
+train$LeftShotx=NA
+train$LeftShoty=NA
+
+train$LeftShotx[train$offense_basket == "L"]=(train$shot_x[which(train$offense_basket == "L")])
+train$LeftShoty[train$offense_basket == "L"]=train$shot_y[which(train$offense_basket == "L")]
+
+train$LeftShotx[train$offense_basket == "R"]=94-(train$shot_x[which(train$offense_basket == "R")])
+train$LeftShoty[(train$offense_basket == "R")]=50-(train$shot_y[which(train$offense_basket == "R")])
+
+test$LeftShotx=NA
+test$LeftShoty=NA
+
+test$LeftShotx[test$offense_basket == "L"]=(test$shot_x[which(test$offense_basket == "L")])
+test$LeftShoty[test$offense_basket == "L"]=test$shot_y[which(test$offense_basket == "L")]
+
+test$LeftShotx[test$offense_basket == "R"]=94-(test$shot_x[which(test$offense_basket == "R")])
+test$LeftShoty[(test$offense_basket == "R")]=50-(test$shot_y[which(test$offense_basket == "R")])
+```
+
+
+*We can see that swtiching the hoop worked pretty well, but there are some freethrows that arent switched,*
+
+```{r plots2, echo=FALSE}
+plot_court("First 500 Shots in Training with hoop Switched")
+points(train[c(1:500),]$LeftShotx, train[c(1:500),]$LeftShoty, pch = 1, col="black")
+```
+
+*There are some foul shots that don't have the hoop switched, so I will fix that.*
+
+```{r Foulshots, echo=FALSE}
+
+plot_court("Right Hand Side")
+points(train[(which(train$LeftShotx>50)),]$LeftShotx, pch = 1, col="black")
+
+
+## Change Foul shots that don't have the offense hoop vairable switched
+train$LeftShotx[which(train$LeftShotx>73 & train$LeftShotx<76 & train$LeftShoty>23 & train$LeftShoty<27)]=19.75
+train$LeftShoty[which(train$LeftShotx>73 & train$LeftShotx<76 & train$LeftShoty>23 & train$LeftShoty<27)]=25
+
+test$LeftShotx[which(test$LeftShotx>73 & test$LeftShotx<76 & test$LeftShoty>23 & test$LeftShoty<27)]=19.75
+test$LeftShoty[which(test$LeftShotx>73 & test$LeftShotx<76 & test$LeftShoty>23 & test$LeftShoty<27)]=25
+
+```
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+*Next I will label the locations of the shots by common basketball shot locations*
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+**Shot Locations**
+
+* BaseMid: if 0 < shotx < 14, and shoty < 20, and shot distance < 19 or if 0 < shotx < 14, and shoty < 47, and shot distance < 19
+
+* ElbowMid: if 8 < shot distance < 19, and shotx > 14
+
+* Long2: if 0 < shotx < 14, and 19 < shot distance < 22 or if 14 < shotx , and 19 < shot distance < 23.75  
+
+* Corner3: if 0 < shotx < 14 , and shoty < 3 or shoty > 47, and shot distance > 22
+
+* Break3: if 23.75 < shot distance < 28 , and shotx > 14
+
+* FreeThrow: if 19 < shotx < 21 and 23 < shoty < 27
+
+* LayUp: if 0 < shotx < 14 and 20 < shoty < 30
+
+* Other: if 28 < shot distance
+
+* Weirdxy: if location is NA
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+```{r Shot_Locations ,echo=FALSE}
+## Label as LayUp, BaseMid, ElbowMid, Long2, Corner3, Break3, Other, weirdxy, Foul Shots
+train$Location=NA
+
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$LeftShoty<20 & train$shot_dist<19),]$Location="BaseMid"
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$LeftShoty<47 & train$shot_dist<19 ),]$Location="BaseMid"
+
+train[which(train$shot_dist>8 & train$shot_dist<19 &train$LeftShotx>14) ,]$Location="ElbowMid"
+
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$shot_dist>19 &train$shot_dist<22),]$Location="Long2"
+train[which(train$shot_dist>19 &train$shot_dist<23.75 &train$LeftShotx>14) ,]$Location="Long2"
+
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$LeftShoty<3),]$Location="Corner3"
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$LeftShoty>47 ),]$Location="Corner3"
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$shot_dist>22 ),]$Location="Corner3"
+
+train[which(train$shot_dist<28 & train$shot_dist>23.75 &train$LeftShotx>14) ,]$Location="Break3"
+
+train[which(train$shot_dist>28 ) ,]$Location="Other"
+
+train[is.na(train$Location),]$Location="Weirdxy"
+
+train[which(train$LeftShotx<21 & train$LeftShotx>19 & train$LeftShoty>23 & train$LeftShoty<27),]$Location="FreeThrow"
+
+train[which(train$LeftShotx>0 & train$LeftShotx<14 & train$LeftShoty>20 & train$LeftShoty<30),]$Location="LayUp"
+
+train$Location=as.factor(train$Location)
+##Do the same for test
+test$Location=NA
+
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$LeftShoty<20 & test$shot_dist<19),]$Location="BaseMid"
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$LeftShoty<47 & test$shot_dist<19 ),]$Location="BaseMid"
+
+test[which(test$shot_dist>8 & test$shot_dist<19 &test$LeftShotx>14) ,]$Location="ElbowMid"
+
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$shot_dist>19 &test$shot_dist<22),]$Location="Long2"
+test[which(test$shot_dist>19 &test$shot_dist<23.75 &test$LeftShotx>14) ,]$Location="Long2"
+
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$LeftShoty<3),]$Location="Corner3"
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$LeftShoty>47 ),]$Location="Corner3"
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$shot_dist>22 ),]$Location="Corner3"
+
+test[which(test$shot_dist<28 & test$shot_dist>23.75 &test$LeftShotx>14) ,]$Location="Break3"
+
+test[which(test$shot_dist>28 ) ,]$Location="Other"
+
+test[which(test$LeftShotx>0 & test$LeftShotx<14 & test$LeftShoty>20 & test$LeftShoty<30),]$Location="LayUp"
+
+test[which(test$LeftShotx<21 & test$LeftShotx>19 & test$LeftShoty>23 & test$LeftShoty<27),]$Location="FreeThrow"
+
+test[is.na(test$Location),]$Location="Weirdxy"
+
+
+test$Location=as.factor(test$Location)
+```
+
+
+```{r graphLocations, echo=FALSE}
+###FIX COLOURS
+plot_court("Shot Locations")
+points(train[(train$Location=="BaseMid"),]$LeftShotx, train[(train$Location=="BaseMid"),]$LeftShoty, pch = 1, col =  "green")
+points(train[(train$Location=="Break3"),]$LeftShotx, train[(train$Location=="Break3"),]$LeftShoty, pch = 1,col = "blue")
+points(train[(train$Location=="Corner3"),]$LeftShotx, train[(train$Location=="Corner3"),]$LeftShoty, pch = 1, col= "purple")
+points(train[(train$Location=="ElbowMid"),]$LeftShotx, train[(train$Location=="ElbowMid"),]$LeftShoty, pch = 1, col="yellow")
+points(train[(train$Location=="LayUp"),]$LeftShotx, train[(train$Location=="LayUp"),]$LeftShoty, pch = 1, col= "orange")
+points(train[(train$Location=="Long2"),]$LeftShotx, train[(train$Location=="Long2"),]$LeftShoty, pch = 1, col="brown")
+points(train[(train$Location=="Other"),]$LeftShotx, train[(train$Location=="Other"),]$LeftShoty, pch = 1, col="black")
+points(train[(train$Location=="Weirdxy"),]$LeftShotx, train[(train$Location=="Weirdxy"),]$LeftShoty, pch = 1, col = "pink")
+points(train[(train$Location=="FreeThrow"),]$LeftShotx, train[(train$Location=="FreeThrow"),]$LeftShoty, pch = 1, col = "red")
+
+```
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+*Finally figure out the fgpct per player in each different possible scenario, and how many shots they took in each scenario.*
+
+```{r fg_pct, echo=FALSE}
+dd <- ddply(train, c("shooter", "Location", "contested", "rushed","catchnshoot", "ispasser"), summarise, attempts=length(made), fgpct=mean(made))
+dd2 <- ddply(train, c("shooter", "Location"), summarise, attempts2=length(made), Locationfgpct=mean(made))
+head(dd,20)
+dd3<- ddply(train, c("Location", "contested", "rushed"), summarise, attempts3=length(made), LeagueAverage=mean(made))
+
+
+head( dd)
+
+```
+*From this week can see the shooting pct of shooter 2989 for different situations in the game over the training set and how many attempts of that type he took*
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+*Next figure out the predicted fg pct for each shot in test set based on how the player did in the scenario in the training set.*
+
+*Additionally we created a regularized, variable, which is the regularization of the fgpct variable. This was calculated by finding the League Average pct for shots of a certain type and then averaging that pct with the shooters actual fgpct. This was done to bring the fgpct of players towards the mean*
+
+
+```{r merging ,echo=FALSE}
+
+test_merged=merge(x=test, y=dd, by.x=c("shooter", "Location", "contested", "rushed", "catchnshoot", "ispasser"), by.y=c("shooter", "Location", "contested", "rushed", "catchnshoot", "ispasser"), all.x=TRUE)
+test_merged =test_merged[order(test_merged$X),]
+
+test_merged=merge(x=test_merged, y=dd2, by.x=c("shooter", "Location"), by.y=c("shooter", "Location"), all.x=TRUE)
+test_merged =test_merged[order(test_merged$X),]
+
+test_merged=merge(x=test_merged, y=dd3, by.x=c("Location", "contested", "rushed"), by.y=c("Location", "contested", "rushed"), all.x=TRUE)
+test_merged =test_merged[order(test_merged$X),]
+
+
+train_merged=merge(x=train, y=dd, by.x=c("shooter", "Location", "contested", "rushed", "catchnshoot", "ispasser"), by.y=c("shooter", "Location", "contested", "rushed", "catchnshoot", "ispasser"), all.x=TRUE)
+train_merged=train_merged[order(train_merged$X),]
+
+train_merged=merge(x=train_merged, y=dd2, by.x=c("shooter", "Location"), by.y=c("shooter", "Location"), all.x=TRUE)
+train_merged=train_merged[order(train_merged$X),]
+
+train_merged=merge(x=train_merged, y=dd3, by.x=c("Location", "contested", "rushed"), by.y=c("Location", "contested", "rushed"), all.x=TRUE)
+train_merged=train_merged[order(train_merged$X),]
+
+train_merged$regularized=((0.5*train_merged$LeagueAverage+0.5*train_merged$fgpct))
+test_merged$regularized=((0.5*test_merged$LeagueAverage+0.5*test_merged$fgpct))
+summary(test_merged$regularized)
+
+
+train_merged=merge(x=train_merged,y=players, by.x=c("shooter"), by.y=c("player_id"), all.x=TRUE)
+test_merged=merge(x=test_merged,y=players, by.x=c("shooter"), by.y=c("player_id"), all.x=TRUE)
+
+train_merged$freethrow=0
+train_merged[train_merged$Location=="FreeThrow",]$freethrow=1
+
+test_merged$freethrow=0
+test_merged[test_merged$Location=="FreeThrow",]$freethrow=1
+
+
+
+
+```
+
+
+
+```{r predicting, echo=FALSE}
+predictions1=rep(NA,165587 )
+
+predictions1[which(test_merged$attempts>15)]=test_merged[which(test_merged$attempts>15),]$regularized
+predictions1[which(test_merged$Location=="FreeThrow" &test_merged$attempts2>15)]=test_merged[which(test_merged$Location=="FreeThrow" &test_merged$attempts2>15),]$Locationfgpct
+predictions1[which(is.na(predictions1)&test_merged$attempts2>15)]=test_merged[which(is.na(predictions1)&test_merged$attempts2>15),]$Locationfgpct
+predictions1[is.na(predictions1)]=test_merged[is.na(predictions1),]$LeagueAverage
+predictions1[is.na(predictions1)]=0.4
+```
+
+###Random Forest
+
+Random forests or random decision forests are an ensemble learning method for classification, regression and other tasks, that operate by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. Random decision forests correct for decision trees' habit of overfitting to their training set.
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+
+*We investigated a random forest model but eventually changed to a XGBoost forest which eventually led us to use LUcas's Model*
+
+
+```{r RandomForest, echo=FALSE}
+###NEWWWW
+#  set.seed(14)
+# 
+# 
+# # set up for xg boost
+# full=rbind(train_merged, test_merged)
+# full[is.na(full$ndd),]$ndd=5
+# full[is.na(full$shot_shot_clock),]$shot_shot_clock=12
+# #full[is.na(full$distance_travelled),]$distance_travelled=0
+# full[is.na(full$position),]$position="Forward"
+# 
+# 
+# full[is.na(full$fgpct),]$fgpct=0.4
+# full[is.na(full$Locationfgpct),]$Locationfgpct=0.4
+# full[is.na(full$LeagueAverage),]$LeagueAverage=0.4
+# full[is.na(full$regularized),]$regularized=0.4
+# full[is.na(full$attempts),]$attempts=0
+# 
+# 
+# full.sparse <-sparse.model.matrix(~ndd+shot_shot_clock+distance_travelled+shot_dist+factor(shooter), data=full)
+# 
+# summary(full)
+# 
+# 
+# X<-full.sparse[1:444109,]
+# X_test <- full.sparse[(444110):609696,]
+# y<-train$made
+# 
+# grid = expand.grid(nrounds=200,
+#                     max_depth= 5,
+#                     eta=0.1,
+#                     gamma= 1,
+#                     colsample_bytree = 1,
+#                     min_child_weight = 20)
+# 
+# y.1 <- ifelse(y==1,"made","missed")
+# xgb <- train(x= X, 
+#   y=as.factor(y.1),
+#   tuneGrid=grid,
+#   method="xgbTree" )
+# 
+# importance_var <- varImp(xgb)
+# plot(importance_var,10)
+# nrow(full)-444109
+# nrow(X_test)
+# y_pred <- predict(xgb, X_test, type="prob")
+# nrow(full.sparse)
+# summary(predictions)
+# count(y_pred[,1]>0.5)
+# predictions=y_pred[,1]
+
+```
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+### On the Shoulders of Lucas Wu
+
+
+Due to our model not beating Lucas Wu's XGBOOST model from week 1, we attempted to model average between both our models. Below is the code used by Lucas.
+
+
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+
+
+```{r top_shooters, echo = F}
+# We want to plot information for the best shooters, but filter out those
+# who have fewer than 500 attempted field goals
+shot_count <- count(train, vars = "shooter")
+fg_percentage <- tapply(train$made, train$shooter, FUN = mean)
+
+# Make sure shot count is aligned with fg_percentage
+# all.equal(as.numeric(names(fg_percentage)), shot_count[, 1])
+fg_percentage <- fg_percentage[shot_count[, 2] > 1000]
+
+fg_percentage <- sort(fg_percentage,decreasing = T)
+top.10 <- head(fg_percentage,10)
+aa <- as.data.frame(cbind(as.numeric(rownames(top.10)),as.numeric(top.10)))
+colnames(aa) <- c("player_id","FG%")
+
+leaderboard <- left_join(aa,players[,2:5], by="player_id")
+
+leaderboard.display <- leaderboard[,c(3,4,5,2)]
+```
+
+
+```{r calc_dist, include = F}
+# X,Y coordinates for the basketball hoops
+left_hoop_xy <- cbind(5.25, 25)
+right_hoop_xy <- cbind(88.75, 25)
+
+# Function to calculate distance between shot location and hoop
+calc_shot_dist <- function(shot_data) {
+  n <- nrow(shot_data)
+  left_shot_ind <- shot_data$offense_basket == "L"
+  right_shot_ind <- shot_data$offense_basket == "R"
+  shot_dist <- numeric(n)
+  shot_dist[left_shot_ind] <- 
+    rdist(shot_data[left_shot_ind, c("shot_x", "shot_y")], left_hoop_xy)
+  shot_dist[right_shot_ind] <- 
+    rdist(shot_data[right_shot_ind, c("shot_x", "shot_y")], right_hoop_xy)
+  shot_dist
+}
+```
+
+# Exploratory Data Analysis & Modelling
+
+1. Free throw effect: It is important to differentiate regular shot attempts and free throws in this data set since free throws are expected to be easier to make in general. Free throws can be identified using shot clock and shot distance.
+
+2. Player effect: Shots also depend on the player effects, which means if a player is a better shooter, he is expected to have a higher chance of making the shot. For example, we can see the top 10 players with the highest field goal percentage are: 
+
+```{r,echo=FALSE}
+leaderboard.display
+```
+
+3. Shot distance effect: Shot distance is definitely one of the most important factors in our model as demonstrated in Jacob's code. And the spike around 15 ft is due to the number of free throws taking at that distance.
+
+```{r}
+train.exp <- train
+train.exp$shot_dist <- calc_shot_dist(train.exp)
+train.exp$sd <- round(train.exp$shot_dist,0)
+explore2 <- train.exp %>% dplyr::group_by(sd)%>% 
+  dplyr::summarise(FG_Per = mean(made))
+plot(explore2[1:50,],type="l")
+```
+
+
+4. Shot clock effect: If the shot clock is in within the first 5 to 7 seconds of shot clock, there is a chance that it might be fast break which has a much higher chance of making that shot.
+
+```{r}
+train.exp$sc <- round(train.exp$shot_shot_clock,0)
+explore1 <- train.exp %>% dplyr::group_by(sc)%>% 
+  dplyr::summarise(FG_Per = mean(made))
+plot(explore1[1:25,],type="l")
+```
+
+
+5. There are other effects such as defenders effect, home team effect and season effect etc, which I will explore more in next week's submission.
+
+```{r,echo=FALSE}
+home_effect <- train.exp %>% dplyr::group_by(home) %>% 
+                dplyr::summarize(Percentage = (sum(made)/length(made))*100)
+
+home_effect$home <- ifelse(home_effect$home==1,"Home","Away")
+
+g <- ggplot(data = home_effect, aes(x = home, y = Percentage, fill = home)) + 
+              geom_bar(stat = 'identity' )
+g
+```
+
+```{r data_prep,cache=TRUE}
+library(dplyr)
+train$shot_dist <- calc_shot_dist(train)
+test$shot_dist <- calc_shot_dist(test)
+full <- rbind(train,test)
+
+FT <- subset(full,(full$shot_shot_clock ==24 & (full$shot_dist <=17.5 & full$shot_dist >=13)))
+
+full$free_throw <- ifelse(full$id %in% FT$id,1,0)
+# table(full$free_throw)
+
+full$team_vs_opp <- ifelse(full$team>full$opponent,paste(full$team,"vs",full$opponent),paste(full$opponent,"vs",full$team))
+
+full.m <-  full %>% dplyr::select(season,quarter,home,pass_distance,shooter,shot_shot_clock,dribbles,distance_travelled,ndd,shot_dist,free_throw)
+
+full.m[is.na(full.m)] <- 0
+
+full.m$shot_shot_clock <- round(full.m$shot_shot_clock,0)
+
+full.sparse <- sparse.model.matrix(~factor(season)+factor(quarter)+factor(home)+pass_distance+factor(shooter)+shot_shot_clock+dribbles+distance_travelled+ndd+shot_dist+factor(free_throw), data = full.m)
+
+X <- full.sparse[1:nrow(train),]
+X_test <- full.sparse[(nrow(train)+1):nrow(full),]
+
+y <- train$made
+```
+
+
+## XGboost Model Tuning
+
+* XGBoost is a library designed and optimized for boosting trees algorithms. Gradient boosting trees model is originally proposed by Friedman et al. The underlying algorithm of XGBoost is similar, specifically it is an extension of the classic gbm algorithm. By employing multi-threads and imposing regularization, XGBoost is able to utilize more computational power and get more accurate prediction.
+
+* The tuning parameters for XGboost is shown below, I used nrounds of 1000 for the actual model, however, it took quite a bit of time to run.
+
+```{r fit_model,echo=TRUE,eval=FALSE}
+
+load("xgb_train_2.rData")
+
+# if you don't have the r.data loaded, you need to run the following code
+# 
+# ## final model
+#  grid = expand.grid(nrounds=1000, 
+#                      max_depth= 5,        
+#                      eta=0.1,      
+#                      gamma= 1, 
+#                      colsample_bytree = 1, 
+#                      min_child_weight = 20)
+#  
+#  y.1 <- ifelse(y==1,"made","missed")
+#  
+#  xgb_train_1 = train(x = X,
+#                    y = as.factor(y.1),
+#                    tuneGrid=grid,
+#                    method = "xgbTree")
+# save(xgb_train_1, file="xgb_train_2.rData")
+```
+
+The following tuning parameter plot suggests that we can potentially further increase the no of depth and more trees at the expense of more computing power.
+```{r,echo=F}
+#plot(xgb_train_1)
+```
+
+Here is the top 10 important variables. As we can see, it's pretty much align with the effects we discussed earlier.
+
+*Finally to create our final submission, we averaged our predictions between Lucas's Model and our regularized model.*
+```{r sub,fig.width=8, fig.height=5,echo=T,cache=T, eval=FALSE}
+# summary(xgb_train_1)
+importance_var <- varImp(xgb_train_1)
+plot(importance_var,10)
+
+xgb.pred <- predict(xgb_train_1,X_test,type="prob")
+
+xgb.pred=0.9*xgb.pred+0.1*predictions1
+
+# Create file for submission
+submission_matrix <- data.frame(test$id, xgb.pred[,1])
+names(submission_matrix) = c('id', 'made')
+hist(xgb.pred[,1])
+# Write submission file
+write.csv(submission_matrix, file='BestModel', row.names = FALSE)
+```
+
+
+*The histogram of predictions makes intuitive sense. we can see two peaks in the distribution to account for regular shots and freethrows*
+
