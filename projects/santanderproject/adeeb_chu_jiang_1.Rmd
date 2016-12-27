@@ -1,0 +1,276 @@
+---
+title: "Santander Product Recommendation Modelling File"
+author: "Team: Stat 440 Abe Adeeb, Dani Chu, Josie XXX"
+date: "November 22, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=TRUE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE)
+```
+
+The goal of this competition is to predict which new Santander products, if any, a customer will purchase in the following month. Here, I will do some data cleaning, adjust some features, and do some visualization to get a sense of what features might be important predictors. I hope this gives you some insight/ideas and gets you excited to build your own model.
+
+# Introduction 
+In this competition, we are provided with 1.5 years of customers' behavior data from Santander bank to predict what new products customers will purchase in the following month, if any. The data starts at 2015-01-28 and contains monthly records of products each customer currently has, such as "credit card", "savings account", etc. 
+
+### The Data
+This dataset includes a variety of data fields we can use as predictions, including:  
+  - the customer's age  
+  - the customer's sex  
+  - the customer's country of residence  
+  - the customer's seniority (months)  
+  - the customer's gross household income  
+  - etc. 
+
+As seen, we have a number of demographic variables for each individual. Intuitively, these factors should play a very significant role in the way people spend, save, and invest. We also have a record of the product(s) they already currently own, which should also contribute to our exploratory analysis.
+  
+### The Objective
+The goal of this competition is to predict what additional products a customer will buy in the last month, 2016-06-28, in addition to what products they already possess at 2016-05-28.
+
+Below is the adapted code that was provided to our class that contains some data cleaning, some adjustments to various features, and some visualization to help us get a sense of what features might be important predictors.
+
+#Data Cleaning
+Despite the file we were given we did not do any datacleaning as it was shown to make our models worse.
+
+
+## Create Model
+This code tied us with the previous weeks highscore; however, we wrote this code ourselves without taking it from the top teams.  The rough strategy is to first find all the customers in their final month before the test data. Then we calculate the most common products owned over all customers in that last month. Next, the strategy is to predict for each customer the 7 most common products that the customer does not already own.
+
+This is done by first calculating all the possible products they could buy, and eliminating the least common products until they hav only purchasable products left.
+
+The next strategy we had did not improve our best model, so the code for it is commented out. The strategy was to predict the 7 most common products for a customers category that each customer didn't already have. We tried different categories split by variables such as sex, age and segmentation. As the distributions of these variables seemed to indicate a preference for different products. (Graphs Below) This did not improve our best model.
+
+###These graphs show the distributions of products by region
+
+![](Regions.png) 
+
+
+![](Product count by Region.png) 
+
+###The distribution of age in the data set, notice the 2 peaks
+
+![](DistAge.png) 
+
+###Product distribution by segmentation, notice the difference in proportional frequency across all 3 categories
+
+![](Product Count by Segmentation.png) 
+
+###The distribution of products by sex is fairly similar
+
+![](Product Count by Sex.png) 
+
+###Total product count that our best model is based off of
+
+![](Product Count.png) 
+
+###Product frequency across different ages, age should be indicative of when a product is obtained.
+
+![](Products vs Age.png) 
+
+
+*Note be aware if the lastmonth.csv file hasnt been created then this will not compile. The code to create it is commented out and does not take too long.
+
+I have included the code in the Markdown so the strategy above can be seen in action.
+```{r Dani code1 ,include=FALSE}
+
+
+###If you don't have the last month file created run this code
+ col_names <- read.csv("./data/train_ver2.csv", header=TRUE, nrows=1)
+ system.time(DF <- read.csv("./data/train_ver2.csv", header=FALSE, skip=12715857))
+ df<-DF
+ colnames(df)<-colnames(col_names)
+# 
+head(df)
+# 
+ write.csv(df, file = "lastmonth.csv")
+
+#sex_age<-read.csv("Segmentation.csv")
+```
+
+```{r Dani code2}
+
+# load in the last months change
+system.time(df<-read.csv("lastmonth.csv",header=TRUE))
+
+#Save the max occurences in the most recent month
+max_occurences=rep(NA,24)
+max_occurences[1]=sum(df$ind_ahor_fin_ult1)
+max_occurences[2]=sum(df$ind_aval_fin_ult1)
+max_occurences[3]=sum(df$ind_cco_fin_ult1)
+max_occurences[4]=sum(df$ind_cder_fin_ult1)
+max_occurences[5]=sum(df$ind_cno_fin_ult1)
+max_occurences[6]=sum(df$ind_ctju_fin_ult1)
+max_occurences[7]=sum(df$ind_ctma_fin_ult1)
+max_occurences[8]=sum(df$ind_ctop_fin_ult1)
+max_occurences[9]=sum(df$ind_ctpp_fin_ult1)
+max_occurences[10]=sum(df$ind_deco_fin_ult1)
+max_occurences[11]=sum(df$ind_deme_fin_ult1)
+max_occurences[12]=sum(df$ind_dela_fin_ult1)
+max_occurences[13]=sum(df$ind_ecue_fin_ult1)
+max_occurences[14]=sum(df$ind_fond_fin_ult1)
+max_occurences[15]=sum(df$ind_hip_fin_ult1)
+max_occurences[16]=sum(df$ind_plan_fin_ult1)
+max_occurences[17]=sum(df$ind_pres_fin_ult1)
+max_occurences[18]=sum(df$ind_reca_fin_ult1)
+max_occurences[19]=sum(df$ind_tjcr_fin_ult1)
+max_occurences[20]=sum(df$ind_valo_fin_ult1)
+max_occurences[21]=sum(df$ind_viv_fin_ult1)
+max_occurences[22]=sum(df$ind_nomina_ult1)
+max_occurences[23]=sum(df$ind_nom_pens_ult1)
+max_occurences[24]=sum(df$ind_recibo_ult1)
+
+df$condition=NA
+# df[df$segmento=="01 - TOP" ,]$condition=1
+# df[df$segmento=="02 - PARTICULARES",]$condition=2
+# df[df$segmento=="03 - UNIVERSITARIO" ,]$condition=3
+df[is.na(df$condition),]$condition=0
+
+df2=df
+
+## read in the test data
+test_data <- read.csv('data/test_ver2.csv')
+
+#Save only the first 2 columns as thats all we need
+test_data <-test_data[,(1:2)]
+
+#save only the columns needed from the training data, ncodpers and all the product columns
+df <- df[df$condition==0,]
+df <- df[,c(3,26:49)]
+
+#merge the two datasets
+test_merged=merge(x=test_data, y=df, all.x= FALSE, by.x=c("ncodpers"), by.y=c("ncodpers"))
+
+#save the column names
+column_name=colnames(df[,2:25])
+#column_name=colnames(sex_age[,3:26])
+
+#give max occurences the names of the columns/products
+max_occurences=as.data.frame(max_occurences)
+max_occurences$column_num=(1:24)
+max_occurences$names=column_name[2:25]
+
+#order them by the most popular products
+max_occurences = max_occurences[order(max_occurences$max_occurences, decreasing=TRUE),]
+
+#flip 1s to 0s and 0s to 1
+test_merged[test_merged==1]=2
+test_merged[test_merged==0]=1
+test_merged[test_merged==2]=0
+
+#calculate how many products the each customer could buy
+test_merged$num_products=apply(test_merged[3:26],1,sum)
+
+#order the columns in merge by popularity of product
+index<-max_occurences$column_num+2
+test_merged<-test_merged[,c(1,2,index,27)]
+
+
+#decrease possible product by least likely until only 7 predictions left
+for (m in (26:3)){
+  test_merged$temp_num_products=test_merged$num_products
+  test_merged$num_products[test_merged$num_products>7 & test_merged[,m]==1]=test_merged$num_products[test_merged$num_products>7 & test_merged[,m]==1]-1
+  test_merged[test_merged$temp_num_products>7,m]=0
+}
+
+#save the columns name for replacing
+column_name=colnames(test_merged[,3:25])
+
+# replace all 1s with the column name and 0s with blank string
+for (k in 1:24){
+  test_merged[test_merged[,2+k]==1,2+k]=column_name[k]
+  test_merged[test_merged[,2+k]==0,2+k]=""
+}
+
+#concatenate the rows with products to create prediction
+preds = apply(test_merged[3:26], 1,paste, collapse=" ")
+
+#get rid of whitespace
+preds1=gsub('\\s+', ' ',preds)
+preds1=trimws(preds1)
+
+preds1<-data.frame(ncodpers=test_merged$ncodpers, added_products=preds1)
+
+preds2=preds1
+```
+
+```{r code not best model, include=FALSE}
+# 
+# for (i in 1:3){
+# print(i)
+# df=df2
+# max_occurences=as.numeric(gsub(",", "", t(sex_age[i,3:26])))
+# 
+# #save only the columns needed from the training data, ncodpers and all the product columns
+# df <- df[df$condition==i,]
+# df <- df[,c(3,26:49)]
+# 
+# 
+# #merge the two datasets
+# test_merged=merge(x=test_data, y=df, all.x= FALSE, by.x=c("ncodpers"), by.y=c("ncodpers"))
+# 
+# #save the column names
+# column_name=colnames(sex_age[,2:26])
+# 
+# #give max occurences the names of the columns/products
+# max_occurences=as.data.frame(max_occurences)
+# max_occurences$column_num=(1:24)
+# max_occurences$names=column_name[2:25]
+# 
+# #order them by the most popular products
+# max_occurences = max_occurences[order(max_occurences$max_occurences, decreasing=TRUE),]
+# 
+# #flip 1s to 0s and 0s to 1
+# test_merged[test_merged==1]=2
+# test_merged[test_merged==0]=1
+# test_merged[test_merged==2]=0
+# 
+# #calculate how many products the each customer could buy
+# test_merged$num_products=apply(test_merged[3:26],1,sum)
+# 
+# #order the columns in merge by popularity of product
+# index<-max_occurences$column_num+2
+# test_merged<-test_merged[,c(1,2,index,27)]
+# 
+# 
+# #decrease possible product by least likely until only 7 predictions left
+# for (m in (26:3)){
+#   test_merged$temp_num_products=test_merged$num_products
+#   test_merged$num_products[test_merged$num_products>7 & test_merged[,m]==1]=test_merged$num_products[test_merged$num_products>7 & test_merged[,m]==1]-1
+#   test_merged[test_merged$temp_num_products>7,m]=0
+# }
+# 
+# #save the columns name for replacing
+# column_name=colnames(test_merged[,3:25])
+# 
+# # replace all 1s with the column name and 0s with blank string
+# for (k in 1:24){
+#   test_merged[test_merged[,2+k]==1,2+k]=column_name[k]
+#   test_merged[test_merged[,2+k]==0,2+k]=""
+# }
+# 
+# #concatenate the rows with products to create prediction
+# preds = apply(test_merged[3:26], 1,paste, collapse=" ")
+# 
+# #get rid of whitespace
+# preds1=gsub('\\s+', ' ',preds)
+# preds1=trimws(preds1)
+# 
+# preds1<-data.frame(ncodpers=test_merged$ncodpers, added_products=preds1)
+# 
+# preds2=rbind(preds1,preds2)
+# }
+
+
+#create submission file
+submission <- data.frame(ncodpers = preds2$ncodpers, added_products = preds2$added_products )
+submission = submission[order(submission$ncodpers),]
+submission <- data.frame(ncodpers=submission$ncodpers, added_products=submission$added_products)
+
+head(submission)
+
+# Write submission file
+write.csv(submission, file='7mostcommontheydonthavealreadybysexandAge.csv', row.names = FALSE)
+
+
+```
