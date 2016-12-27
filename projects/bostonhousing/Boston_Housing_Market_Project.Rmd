@@ -1,0 +1,491 @@
+---
+title: "House Prices Modelling"
+author: "Team:Ebrahim Adeeb"
+date: "October 4, 2016"
+output: 
+  html_document:
+      toc: yes
+      toc_float: yes
+      toc_depth: 4
+      collapsed: FALSE
+---
+
+```{r setup, include=FALSE}
+## Load Packages
+#install.packages("pacman")
+pacman::p_load(dplyr,corrplot,glmnet,ggplot2, plyr, moments, mice ,
+               VIM,car , caret , RColorBrewer,randomForest , xgboost )
+
+#library(MASS) 
+#library(Metrics)
+#library(lars)
+#library(Matrix)
+#library(methods)
+```
+
+```{r useful_functions, include=FALSE}
+# Evaluation metric (RMSE of log prices)
+eval_metric <- function(predicted_sales_price, actual_sales_price){
+  sqrt(mean((log(predicted_sales_price) - log(actual_sales_price))^2))
+}
+```
+
+#Model 1: LM Model
+
+## Data Step
+
+**Load data train.csv from file as a dataframe and name it "train".**
+
+
+```{r load_data3}
+train <- read.csv('train.csv',stringsAsFactors=T)
+str(train)
+```
+
+*dataframe "train" has* `r nrow(train)` *Rows with* `r ncol(train)`  *Columns*.
+
+```{r imputation, include=FALSE}
+test <- read.csv('test.csv',stringsAsFactors=T)
+#str(test)
+total<-rbind(train[,-81],test)
+
+
+# Calculate percentages of missing values for each columns
+per_NA<-rep(NA,ncol(total))
+for(i in 1:ncol(total)){
+  per_NA[i]<-sum(is.na(total[,i]))/nrow(total)
+}
+#round(per_NA,3)
+# The vairabes with missing value percentages greater than 50%.
+names(total)[per_NA>0.5]
+# Their corresponding value
+round(per_NA[per_NA>0.5],2)
+# The variables with missing values
+names(total)[per_NA>0]
+# Remove the columns with missing value percentages greater than 50%
+total<-total[,per_NA<=0.5]
+per_NA<-per_NA[per_NA<=0.5]
+
+# Change factors to numeric variables
+for(i in 1:ncol(total)){
+  if(is.factor(total[,i])){
+    total[,i]<-as.numeric(total[,i])
+  }
+}
+#str(total)
+
+# Imputation
+total[is.na(total)]<-0
+
+# Check if there is any missing value left.
+any(is.na(total))
+str(total)
+
+# Convert all character variables to factors
+#total$Id<-as.factor(total$Id)
+#total$MSSubClass<-as.factor(total$MSSubClass)
+#total$OverallQual<-as.ordered(total$OverallQual)
+#total$OverallCond<-as.ordered(total$OverallCond)
+
+#str(total)
+#any(is.na(total))
+
+# Sperate testing and training
+#any(is.na(train))
+train<-cbind(total[1:1460,],SalePrice=train[,81])
+#str(train)
+#any(is.na(test))
+test<-total[1461:2919,]
+#str(test)
+```
+*dataframe "test" has* `r nrow(test)` *Rows with* `r ncol(test)`  *Columns*. \n
+
+
+We noticed that "Alley","PoolQC","Fence","MiscFeature" have a high number of NA values so we remove them from the dataframe "train and test". \n 
+
+
+"train" consists of **`r nrow(train)`** rows and **`r ncol(train)`** columns.
+"test" consists of **`r nrow(test)`** rows and **`r ncol(test)`** columns.
+
+```{r head_data}
+head(train)
+```
+
+Due to the high count of columns a pair plot is not feasible, let's first draw a correlation plot and then isolate the 12 most correlated non-factor variables with the outcome.\n
+
+**The plot below is a visualization of correlations between our variables. The color of the circles represents the direction of the correlation (ie. Blue = positive, Red = negative). The size of the circles represents the strength of the correlation (ie. Large close to 1/-1, Small close to 0).**
+
+```{r desc_analysis}
+train$SalePrice<-log(train$SalePrice)
+correlations<- cor(train[,-1])
+corrplot(correlations, method="circle", type="upper",  sig.level = 0.01, insig = "blank",tl.cex=0.5)
+most_correlated <- sort(abs(correlations[rownames(correlations) != "SalePrice",colnames(correlations)=="SalePrice"]),decreasing = T)
+list_most_correlated <- names(most_correlated)
+# The 12 most correlated variable
+list_most_correlated[1:12] 
+```
+
+but let's try plotting the outcome (log(SalePrice)) vs numeric columns.
+
+```{r pairs_plot, fig.width=8, fig.height=10}
+# Create a grid of plots
+par(mfrow=c(3, 4))
+for(variable_ref in 1:12){
+  plot(train[, colnames(train) == list_most_correlated[variable_ref]],train$SalePrice, xlab=list_most_correlated[variable_ref], ylab="log(Sales Price)")
+}
+par(mfrow=c(1,1))
+```
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+## Build a model and explore it
+
+
+\n
+\n
+
+**Multiple linear models:**
+
+* Linear regression is an approach for modeling the relationship between a scalar dependent variable y and one or more explanatory variables (or independent variables) denoted X. The case of one explanatory variable is called simple linear regression. For more than one explanatory variable, the process is called multiple linear regression.(This term should be distinguished from multivariate linear regression, where multiple correlated dependent variables are predicted, rather than a single scalar variable.)
+
+* Multiple linear regression is the most common form of linear regression analysis. As a predictive analysis, the multiple linear regression is used to explain the relationship between one continuous dependent variable from two or more independent variables.  The independent variables can be continuous or categorical (dummy coded as appropriate).
+
+**Stepwise Regression:**
+
+* Stepwise regression includes regression models in which the choice of predictive variables is carried out by an automatic procedure. Usually, this takes the form of a sequence of F-tests or t-tests, but other techniques are possible, such as adjusted R2, Akaike information criterion, Bayesian information criterion, Mallows's Cp, PRESS, or false discovery rate.
+
+* To build our model we will use Akaike information criterion (AIC) to evaluate which model to use.
+
+
+* The approach for stepwise regression we use is backward elimination, which involves starting with all candidate variables, testing the deletion of each variable using a chosen model comparison criterion, deleting the variable (if any) that improves the model the most by being deleted, and repeating this process until no further improvement is possible.
+
+
+
+
+```{r fit_model, echo=FALSE}
+lm.train.full <- lm(SalePrice~.,data=train[,-1])
+summary(lm.train.full)
+
+# Method 1:Base on the p-value to choose variables included in lm model
+lm.train.redu <- lm(SalePrice~.,data=train[,(names(train)%in%c("MSZoning","LotArea","Street","LandSlope","Condition2","OverallQual","OverallCond","YearBuilt","YearRemodAdd","BsmtQual","BsmtCond","BsmtFinType1","BsmtFinType2","BsmtFinSF2","HeatingQC","CentralAir","X1stFlrSF","X2ndFlrSF","BsmtFullBath","FullBath","KitchenQual","TotRmsAbvGrd","Functional","Fireplaces","GarageCars","PavedDrive","WoodDeckSF","EnclosedPorch","ScreenPorch","PoolArea","YrSold","SaleCondition","SalePrice"))])
+summary(lm.train.redu)
+
+# Method 2: Use stepwise regression to choose variables
+step.lm.train <- step(lm.train.full,trace=0,direction="both")
+summary(step.lm.train)
+step.lm.train$anova
+lm.train <- lm(SalePrice~.,step.lm.train$model)
+
+# Compare these two methods, stepwise regression works better. Thus, we will use it in the future
+anova(lm.train.redu,lm.train)
+```
+
+
+**Below is our residual plots for the regression model. Residual plots are used to confirm the validity of our model.**\n
+
+* Residual vs Fitted plot is used to visualize the distribution of our residuals. We can use this plot to find non-linearity and heteroscedasticity. In our case the plot shows neither.
+
+* Q–Q plot ("Q" stands for quantile) is a probability plot, which is a graphical method for comparing two probability distributions by plotting their quantiles against each other. First, the set of intervals for the quantiles is chosen. A point (x, y) on the plot corresponds to one of the quantiles of the second distribution (y-coordinate) plotted against the same quantile of the first distribution (x-coordinate). Thus the line is a parametric curve with the parameter which is the (number of the) interval for the quantile. If the two distributions being compared are similar, the points in the Q–Q plot will approximately lie on the line y = x such as in our case.
+
+* Scale-Location also called Spread-Location plot. This plot shows if residuals are spread equally along the ranges of predictors. This is how you can check the assumption of equal variance (homoscedasticity). It’s good if you see a horizontal line with equally (randomly) spread points. In our case the line is moderately horizontal with a very slight angle in the data in the predicted values below the mean. Further analysis of this may be required. 
+
+* Residuals vs Leverage plot helps us to find influential cases (i.e., subjects) if any. Due to a lack of experience in interpreting this plot we have chosen to ignore its results. 
+
+```{r model residual plots}
+plot(lm.train)
+```
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+## Validation
+
+
+Now, let's validate our model using the leave-one-out Cross-validation method.\n
+
+
+**Definition:**
+
+* Cross-validation, sometimes called rotation estimation,is a model validation technique for assessing how the results of a statistical analysis will generalize to an independent data set. It is mainly used in settings where the goal is prediction, and one wants to estimate how accurately a predictive model will perform in practice. In a prediction problem, a model is usually given a dataset of known data on which training is run (training dataset), and a dataset of unknown data (or first seen data) against which the model is tested (testing dataset). The goal of cross validation is to define a dataset to "test" the model in the training phase (i.e., the validation dataset), in order to limit problems like overfitting, give an insight on how the model will generalize to an independent dataset.\n
+
+* Leave-one-out cross-validation involves using p=1 observations as the validation set and the remaining observations as the training set. This is repeated on all ways to cut the original sample on a validation set of p=1 observations and a training set.\n
+
+
+```{r cross_validation}
+# leave-one-out cross-validation
+out_of_sample_prediction <- rep(NA, nrow(train))
+for(data_point in 1:(nrow(train))){
+  # Fit model on data with point left out
+  # lm_model_loo <- lm(SalePrice ~ OverallQual + GrLivArea , data = train[-data_point, ])
+  out_of_sample_prediction[data_point] <- predict(lm.train, newdata = train[data_point, -1])
+}
+```
+
+
+```{r evaluate_cv}
+eval_metric(out_of_sample_prediction, train$SalePrice)
+predicted_values_lm <- predict(lm.train, newdata = test[,-1])
+predicted_values_lm<-exp(predicted_values_lm)
+```
+
+Our Evaluation Metric Score is: `r eval_metric(out_of_sample_prediction, train$SalePrice)`.
+
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+## Model Averaging
+
+Sometimes there are several models that seem plausible, model averaging allows you to compute the average of a parameter from the models. We used model averaging as the tehcnique to lower our Kaggle Score. We used the model from Sung and Fang/Wu. A more analytical technique would be to use Bayesian Model Averaging but we used a trial and error method to lower our score. 
+
+The averaging weights we used are ( 0.8 Sung's model +  1.8 Fang/Wu's model 0.4 Our Model ) / 3
+
+\n
+\n
+\n
+
+
+
+
+**Below is the code used by our classmates to create their models.**
+
+
+
+
+
+---------------------------------------------------------------------------------------
+## Model 2: Sung lm model
+*Sung Ha scored 0.12794 on Kaggle's leaderboard*
+\n\n
+
+###Stepwise regression and AIC 
+
+
+#### Load in and explore data
+
+```{r load_data2}
+house_prices_data <- read.csv('train.csv', stringsAsFactors = FALSE)
+#str(house_prices_data)
+house_prices_data_test <- read.csv('test.csv', stringsAsFactors = FALSE)
+```
+  
+```{r Sung_code}
+train_sung <- house_prices_data %>% mutate_if(is.character, as.factor)
+#str(train_sung)
+n_na <-sapply(train_sung,function(y)length(which(is.na(y)==T)))
+n_na.df<- data.frame(var=colnames(train_sung),num_NA=n_na)
+
+train_sung <- train_sung[,!(names(train_sung)%in%c("Id","Alley","PoolQC","Fence","MiscFeature"))]
+
+num<-sapply(train_sung,is.numeric)
+num<-train_sung[,num]
+
+for(i in 1:76){
+  if(is.factor(train_sung[,i])){
+    train_sung[,i]<-as.integer(train_sung[,i])
+  }
+}
+train_sung[is.na(train_sung)]<-0
+num[is.na(num)]<-0
+
+train.train<- train_sung[1:floor(length(train_sung[,1])*0.8),]
+train.train$SalePrice <- log(train.train$SalePrice)
+train.test<- train_sung[(length(train.train[,1])+1):1460,]
+train.test$SalePrice <- log(train.test$SalePrice)
+
+lm.train.train <- lm(SalePrice~.,train.train)
+# summary(lm.train.train)
+step.lm.train.train <- step(lm.train.train,trace = 0,direction="both")
+# summary(step.lm.train.train)
+lm.train.train <- lm(SalePrice~.,step.lm.train.train$model)
+# plot(lm.train.train)
+
+# Load and predict on test set
+test_sung <- house_prices_data_test %>% mutate_if(is.character, as.factor)
+
+n_na <-sapply(test_sung,function(y)length(which(is.na(y)==T)))
+n_na.df<- data.frame(var=colnames(test_sung),num_NA=n_na)
+
+test_sung <- test_sung[,!(names(test_sung)%in%c("Id","Alley","PoolQC","Fence","MiscFeature"))]
+
+num<-sapply(test_sung,is.numeric)
+num<-test_sung[,num]
+
+for(i in 1:75){
+  if(is.factor(test_sung[,i])){
+    test_sung[,i]<-as.integer(test_sung[,i])
+  }
+}
+test_sung[is.na(test_sung)]<-0
+num[is.na(num)]<-0
+
+sung.predicted_values <- exp(predict(lm.train.train, newdata = test_sung))
+```
+
+## Validation
+
+LOOCV for the stepwise model.
+
+```{r cross_validation2}
+# leave-one-out cross-validation
+out_of_sample_prediction <- rep(NA, nrow(train_sung))
+train_sung$SalePrice <- log(train_sung$SalePrice)
+for(data_point in 1:nrow(train_sung)){
+  # Fit model on data with point left out
+  # lm_model_loo <- lm(SalePrice ~ OverallQual + GrLivArea , data = train[-data_point, ])
+  out_of_sample_prediction[data_point] <- (predict(lm.train.train, newdata = train_sung[data_point, ]))
+}
+```
+
+
+```{r evaluate_cv2}
+out_of_sample_prediction[out_of_sample_prediction < 0] <- 100
+eval_metric(exp(out_of_sample_prediction), house_prices_data$SalePrice)
+```
+
+The final LOOCV score is `r eval_metric(exp(out_of_sample_prediction), house_prices_data$SalePrice)`.
+
+
+
+\n
+\n
+
+---------------------------------------------------------------------------------------
+
+# Model 3: Fang/Wu LASSO Model
+*Fang/Wu scored 0.12023 on Kaggle's leaderboard, but they also used model averaging*
+\n\n
+
+##Lasso
+
+* Lasso (least absolute shrinkage and selection operator) (also Lasso or LASSO) is a regression analysis method that performs both variable selection and regularization in order to enhance the prediction accuracy and interpretability of the statistical model it produces.
+
+* Lasso was originally formulated for least squares models and this simple case reveals a substantial amount about the behavior of the estimator, including its relationship to ridge regression and best subset selection and the connections between lasso coefficient estimates and so-called soft thresholding. It also reveals that (like standard linear regression) the coefficient estimates need not be unique if covariates are collinear.
+
+
+### Explorary Data Analysis
+
+```{r read_in}
+house_prices_data_test$SalePrice <- -999
+full <- rbind(house_prices_data,house_prices_data_test)
+
+full <- full %>% mutate_if(is.character, as.factor)
+
+factor_columns <- names(which(sapply(full, class) == 'factor'))
+
+non_factor_columns <- names(which(sapply(full, class) != 'factor'))
+non_factor_columns <- non_factor_columns[!non_factor_columns %in% c("Id","SalePrice")]
+```
+
+If we take a look at the missing values in this data set, there are `r sum(is.na(house_prices_data))` missing values in the training set and `r sum(is.na(house_prices_data_test))` in the test set.
+
+```{r fig.width=8, fig.height=5, warning=FALSE}
+# display the pattern of missing values
+mice_plot <- aggr(full, col=c('navyblue','yellow'),
+                  numbers=TRUE, sortVars=TRUE,
+                  labels=names(full), cex.axis=.8,
+                  gap=3, ylab=c("Missing data","Pattern"))
+```
+
+
+We can further investigate how many missing values in each column in the training set and test set:
+```{r missing_counts}
+missing_full <- sapply(full, function(x) sum(is.na(x)))
+missing_full[missing_full!=0]
+
+```
+
+Correlation plot
+```{r}
+M<-cor(na.omit(full[non_factor_columns]))
+corrplot(M, type="upper", order="hclust",col=brewer.pal(n=8, name="PuOr"))
+```
+
+### Feature Engineering
+
+1. Replace NA in numeric variables with their mean
+2. Replace NA in categorical variables with zero
+3. Generate new variables, Age, OverallQual Square and GrLivArea Square
+4. Log-transform skewed variables
+
+```{r}
+full <- full %>% mutate(Age = YrSold - YearBuilt,
+                        OverallQual_Square = OverallQual*OverallQual,
+                        GrLivArea_Square = GrLivArea*GrLivArea)
+
+all_data <- full
+for (i in 1:length(non_factor_columns)){
+  if (skewness(all_data[non_factor_columns[i]],na.rm = TRUE) > 0.75) {
+    all_data[non_factor_columns[i]] <- log(all_data[non_factor_columns[i]]+1)
+  }
+}
+
+all_data <- all_data %>% select(-Alley,-FireplaceQu,-MiscFeature,-PoolQC,-Fence)
+
+feature_classes <- sapply(names(all_data),function(x){class(all_data[[x]])})
+categorical_feats <- names(feature_classes[feature_classes == "factor"])
+numeric_feats <-names(feature_classes[feature_classes != "factor"])
+
+numeric_df <- all_data[numeric_feats]
+
+for (x in numeric_feats) {
+  mean_value <- mean(full[[x]],na.rm = TRUE)
+  all_data[[x]][is.na(all_data[[x]])] <- mean_value
+}
+
+dummies <- dummyVars(~.,all_data[categorical_feats])
+categorical_1 <- predict(dummies,all_data[categorical_feats])
+categorical_1[is.na(categorical_1)] <- 0  
+
+all_data <- cbind(all_data[numeric_feats],categorical_1)
+
+# create data for training and test
+X_train <- all_data[1:nrow(house_prices_data),]
+X_test <- all_data[(nrow(house_prices_data)+1):nrow(all_data),]
+y <- log(house_prices_data$SalePrice+1)
+X_train$SalePrice <- NULL
+X_test$SalePrice <- NULL
+X_train$Id <- NULL
+X_test$Id <- NULL
+x_train <- as.matrix(X_train)
+x_test <-  as.matrix(X_test)
+```
+
+
+```{r fit_model2}
+cv1=cv.glmnet(x_train,y,nfolds=10,alpha=1)
+plot(cv1)
+coef(cv1)
+wu.predicted_values <- exp(predict(cv1,s=cv1$lambda.min,newx=x_test))
+wu.predicted_values[661] <- sung.predicted_values[661]
+sung.predicted_values[1090] <- wu.predicted_values[1090]
+```
+
+
+
+# Create Submission File
+
+After getting all predicted values from the above models, we summarize the three and weight them accordingly. The weights were decided through a trial and error method that got the lowest Kaggle score. The weights are ( 0.4 Model #1 + 0.8 Model #2 +  1.8 Model #3  ) / 3.
+
+
+
+```{r load_test_ data, eval=FALSE}
+# Predict on test set and fixed some outliers
+summary(wu.predicted_values)
+summary(sung.predicted_values)
+summary(predicted_values_lm)
+predicted_values <- (0.8*sung.predicted_values + 1.8* wu.predicted_values + 0.4*predicted_values_lm)/3
+
+# Create file for submission
+submission_matrix <- data.frame(cbind(house_prices_data_test$Id, predicted_values))
+colnames(submission_matrix) = c('Id', 'SalePrice')
+submission_matrix$SalePrice <- round(submission_matrix$SalePrice)
+
+# Write submission file
+write.csv(submission_matrix, file='submission_file_final.csv', row.names = FALSE)
+```
